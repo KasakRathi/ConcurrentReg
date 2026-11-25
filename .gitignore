@@ -1,0 +1,22 @@
+# secrets / local environment
+.env
+.demo.env
+.demo-pids/
+.demo-logs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# experiment output (README: results/ is ignored by Git)
+results/
+
+# frontend build + deps
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# OS
+.DS_Store
