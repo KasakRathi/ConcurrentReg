@@ -1,0 +1,390 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>ConcurrentReg media scenes</title>
+<style>html,body{margin:0;background:#000}canvas{display:block}</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+/*
+  Original 3D scenes for the ConcurrentReg landing page. A tiny software renderer on Canvas 2D:
+  geometry is built here, lit with one key light plus rim light, grain is drawn on "lit" faces, and
+  everything is a pure function of time t in [0,1) so each clip loops seamlessly.
+  render.mjs steps t, grabs each frame and encodes it with ffmpeg. Nothing here is copied from any other site.
+*/
+const TAU = Math.PI * 2;
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+// ------------------------------------------------------------------ math
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const rotX = (p, a) => { const c = Math.cos(a), s = Math.sin(a); return [p[0], p[1] * c - p[2] * s, p[1] * s + p[2] * c]; };
+const rotY = (p, a) => { const c = Math.cos(a), s = Math.sin(a); return [p[0] * c + p[2] * s, p[1], -p[0] * s + p[2] * c]; };
+const rotZ = (p, a) => { const c = Math.cos(a), s = Math.sin(a); return [p[0] * c - p[1] * s, p[0] * s + p[1] * c, p[2]]; };
+const ease = (x) => x * x * (3 - 2 * x);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const mix = (a, b, t) => a + (b - a) * t;
+function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+// ------------------------------------------------------------------ geometry
+// A face: 4 vertices (object space), outward normal, material.
+function box(c, s, mat, rot) {
+  const [cx, cy, cz] = c, [sx, sy, sz] = s.map((v) => v / 2);
+  const V = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]].map(([x, y, z]) => [cx + x * sx, cy + y * sy, cz + z * sz]);
+  const F = [[[4, 5, 6, 7], [0, 0, 1]], [[1, 0, 3, 2], [0, 0, -1]], [[5, 1, 2, 6], [1, 0, 0]], [[0, 4, 7, 3], [-1, 0, 0]], [[7, 6, 2, 3], [0, 1, 0]], [[0, 1, 5, 4], [0, -1, 0]]];
+  return F.map(([idx, n], i) => ({ v: idx.map((k) => V[k]), n, mat: Array.isArray(mat) ? mat[i] : mat, id: (box.count = (box.count || 0) + 1) }));
+}
+function torus(R, r, nu, nv, mat, center = [0, 0, 0]) {
+  const faces = [];
+  const P = (u, v) => [center[0] + (R + r * Math.cos(v)) * Math.cos(u), center[1] + r * Math.sin(v), center[2] + (R + r * Math.cos(v)) * Math.sin(u)];
+  const N = (u, v) => [Math.cos(v) * Math.cos(u), Math.sin(v), Math.cos(v) * Math.sin(u)];
+  for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+    const u0 = (i / nu) * TAU, u1 = ((i + 1) / nu) * TAU, v0 = (j / nv) * TAU, v1 = ((j + 1) / nv) * TAU;
+    faces.push({ v: [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)], n: N((u0 + u1) / 2, (v0 + v1) / 2), mat, id: 9000 + i * 100 + j, smooth: true });
+  }
+  return faces;
+}
+function sphere(r, nu, nv, mat, center = [0, 0, 0]) {
+  const faces = [];
+  const P = (u, v) => [center[0] + r * Math.sin(v) * Math.cos(u), center[1] + r * Math.cos(v), center[2] + r * Math.sin(v) * Math.sin(u)];
+  for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+    const u0 = (i / nu) * TAU, u1 = ((i + 1) / nu) * TAU, v0 = (j / nv) * Math.PI, v1 = ((j + 1) / nv) * Math.PI;
+    const n = norm(sub(P((u0 + u1) / 2, (v0 + v1) / 2), center));
+    faces.push({ v: [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)], n, mat: typeof mat === "function" ? mat(i, j) : mat, id: 5000 + i * 100 + j, smooth: true });
+  }
+  return faces;
+}
+function cylinder(r, h, n, mat, center = [0, 0, 0]) {
+  const faces = [];
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * TAU, a1 = ((i + 1) / n) * TAU, am = (a0 + a1) / 2;
+    const p = (a, y) => [center[0] + r * Math.cos(a), center[1] + y, center[2] + r * Math.sin(a)];
+    faces.push({ v: [p(a0, -h / 2), p(a1, -h / 2), p(a1, h / 2), p(a0, h / 2)], n: [Math.cos(am), 0, Math.sin(am)], mat, id: 7000 + i, smooth: true });
+  }
+  const top = [], bot = [];
+  for (let i = 0; i < n; i++) { const a = (i / n) * TAU; top.push([center[0] + r * Math.cos(a), center[1] + h / 2, center[2] + r * Math.sin(a)]); bot.push([center[0] + r * Math.cos(a), center[1] - h / 2, center[2] + r * Math.sin(a)]); }
+  faces.push({ v: top, n: [0, 1, 0], mat, id: 7900 });
+  faces.push({ v: bot.slice().reverse(), n: [0, -1, 0], mat, id: 7901 });
+  return faces;
+}
+const transform = (faces, fn) => faces.map((f) => ({ ...f, v: f.v.map(fn), n: fn(f.n, true) }));
+
+// ------------------------------------------------------------------ materials
+const M = {
+  glass: { c: [7, 8, 9], spec: 0.7, shine: 46, rim: 0.65, rimC: [190, 205, 220] },
+  glassLight: { c: [13, 14, 16], spec: 0.8, shine: 36, rim: 0.7, rimC: [200, 215, 230] },
+  plate: { c: [10, 11, 13], spec: 0.8, shine: 40, rim: 0.9, rimC: [210, 220, 235] },
+  chrome: { c: [96, 100, 108], spec: 1.0, shine: 70, rim: 0.8, rimC: [235, 240, 248] },
+  metal: { c: [38, 40, 44], spec: 0.9, shine: 60, rim: 0.7, rimC: [230, 235, 240] },
+  grainMint: { c: [18, 28, 24], spec: 0.2, shine: 10, rim: 0.3, rimC: [140, 255, 200], grain: [110, 231, 183], emit: 0 },
+  mintGlow: { c: [30, 80, 60], spec: 0.6, shine: 30, rim: 0.9, rimC: [110, 231, 183], emit: 0.25 },
+  amberGlow: { c: [70, 44, 12], spec: 0.7, shine: 40, rim: 0.9, rimC: [255, 190, 90], emit: 0.2 },
+  violetGlow: { c: [40, 26, 80], spec: 0.7, shine: 40, rim: 0.9, rimC: [190, 160, 255], emit: 0.2 },
+  skyGlow: { c: [10, 54, 72], spec: 0.7, shine: 40, rim: 0.9, rimC: [110, 220, 255], emit: 0.25 },
+};
+
+// ------------------------------------------------------------------ camera + renderer
+const LIGHT = norm([-0.5, 0.8, 0.65]);
+const LIGHT2 = norm([0.8, -0.2, 0.4]);
+function project(p, cam) {
+  // camera looks down -z from (0,0,cam.d); p already in view space (x right, y up, z toward camera)
+  const z = cam.d - p[2];
+  const s = cam.f / z;
+  return [cam.cx + p[0] * s, cam.cy - p[1] * s, z];
+}
+
+function shade(face, nView, vcenter, cam) {
+  const m = face.mat;
+  const V = norm(sub([0, 0, cam.d], vcenter));
+  const nd = Math.max(0, dot(nView, LIGHT));
+  const nd2 = Math.max(0, dot(nView, LIGHT2)) * 0.25;
+  const H = norm(add(LIGHT, V));
+  const sp = Math.pow(Math.max(0, dot(nView, H)), m.shine || 20) * (m.spec || 0);
+  const rim = Math.pow(1 - Math.max(0, dot(nView, V)), 3) * (m.rim || 0);
+  const amb = 0.42;
+  const c = m.c.map((k, i) => clamp(k * (amb + nd * 1.0 + nd2) + sp * 255 * 0.9 + rim * (m.rimC ? m.rimC[i] : 255) * 0.55 + (m.emit ? m.c[i] * 4 * m.emit : 0), 0, 255));
+  return { c, nd, sp, rim };
+}
+
+function drawFaces(faces, cam, opts = {}) {
+  const items = [];
+  for (const f of faces) {
+    const vv = f.v.map((p) => cam.view(p));
+    const nv = cam.viewN(f.n);
+    const center = vv.reduce((a, p) => add(a, p), [0, 0, 0]).map((k) => k / vv.length);
+    const toCam = sub([0, 0, cam.d], center);
+    if (dot(nv, toCam) <= 0 && !f.smooth) continue;
+    if (f.smooth && dot(nv, toCam) < -0.15 * Math.hypot(...toCam)) continue;
+    items.push({ f, vv, nv, center, depth: center[2] });
+  }
+  items.sort((a, b) => a.depth - b.depth);
+  for (const it of items) {
+    const { f, vv, nv, center } = it;
+    const pts = vv.map((p) => project(p, cam));
+    const sh = shade(f, nv, center, cam);
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+    ctx.closePath();
+    const g = ctx.createLinearGradient(pts[0][0], pts[0][1], pts[2][0], pts[2][1]);
+    const [r, gg, b] = sh.c;
+    g.addColorStop(0, `rgb(${Math.min(255, r * 1.25)},${Math.min(255, gg * 1.25)},${Math.min(255, b * 1.25)})`);
+    g.addColorStop(1, `rgb(${r * 0.7},${gg * 0.7},${b * 0.7})`);
+    if (f.smooth) {
+      const mid = `rgb(${r},${gg},${b})`;
+      ctx.fillStyle = mid;
+      ctx.strokeStyle = mid;
+      ctx.lineWidth = 0.9;
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = g;
+      ctx.fill();
+    }
+    if (!f.smooth) {
+      ctx.strokeStyle = `rgba(255,255,255,${0.03 + 0.12 * sh.nd + 0.1 * sh.rim})`;
+      ctx.lineWidth = Math.max(1, cam.f / 900);
+      ctx.stroke();
+    }
+    if (f.mat.grain && (f.lit ?? 1) > 0.01) {
+      const lit = f.lit ?? 1;
+      ctx.save();
+      ctx.clip();
+      const R = rng(f.id * 977 + (opts.grainSeed || 0));
+      const [a, b2, c2, d] = pts;
+      ctx.globalCompositeOperation = "lighter";
+      const base = f.mat.grain;
+      ctx.fillStyle = `rgba(${base[0]},${base[1]},${base[2]},${0.16 * lit})`;
+      ctx.fill();
+      const n = Math.floor(900 * lit);
+      for (let k = 0; k < n; k++) {
+        const u = R(), v = R();
+        const x = a[0] * (1 - u) * (1 - v) + b2[0] * u * (1 - v) + c2[0] * u * v + d[0] * (1 - u) * v;
+        const y = a[1] * (1 - u) * (1 - v) + b2[1] * u * (1 - v) + c2[1] * u * v + d[1] * (1 - u) * v;
+        const flick = 0.55 + 0.45 * Math.sin((opts.t || 0) * TAU * 3 + k);
+        ctx.fillStyle = `rgba(${base[0] + 40},${base[1] + 20},${base[2] + 40},${(0.35 + R() * 0.6) * lit * flick})`;
+        ctx.fillRect(x, y, 1.6, 1.6);
+      }
+      ctx.restore();
+    }
+  }
+}
+
+function glow(x, y, r, color, a = 1) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, `rgba(${color[0]},${color[1]},${color[2]},${0.5 * a})`);
+  g.addColorStop(0.45, `rgba(${color[0]},${color[1]},${color[2]},${0.14 * a})`);
+  g.addColorStop(1, `rgba(${color[0]},${color[1]},${color[2]},0)`);
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+function makeCam(size, o) {
+  const { yaw = 0, pitch = -0.45, roll = 0, d = 9, f = size * 1.15, shift = [0, 0] } = o;
+  const view = (p) => rotZ(rotX(rotY(p, yaw), pitch), roll);
+  return { d, f, cx: size / 2 + shift[0], cy: size / 2 + shift[1], view, viewN: view };
+}
+
+function background(size, tint) {
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, size, size);
+  const g = ctx.createRadialGradient(size * 0.5, size * 0.55, 0, size * 0.5, size * 0.55, size * 0.7);
+  g.addColorStop(0, `rgba(${tint[0]},${tint[1]},${tint[2]},0.20)`);
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+}
+
+function vignette(size) {
+  const g = ctx.createRadialGradient(size / 2, size / 2, size * 0.28, size / 2, size / 2, size * 0.75);
+  g.addColorStop(0, "rgba(0,0,0,0)");
+  g.addColorStop(1, "rgba(0,0,0,0.65)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+}
+
+// ------------------------------------------------------------------ scenes (t in [0,1))
+const scenes = {};
+
+// 1. Hero: a 3x3x3 lattice of dark glass cells. Cells light up mint one after another, like seats being committed
+//    one at a time, then fade together at the end of the loop. A 90 degree turn per loop (the lattice has 4-fold symmetry).
+scenes.hero = {
+  size: 960,
+  draw(t) {
+    const S = this.size;
+    background(S, [90, 100, 110]);
+    const cell = 1.0, gap = 0.1, pitch = cell + gap;
+    const yaw = (t * TAU) / 4 + 0.5;
+    const cam = makeCam(S, { yaw, pitch: 0.5 + 0.04 * Math.sin(t * TAU), d: 24, f: S * 3.5, shift: [0, 0] });
+    let faces = [];
+    const order = [];
+    for (let ix = -1; ix <= 1; ix++) for (let iy = -1; iy <= 1; iy++) for (let iz = -1; iz <= 1; iz++) order.push([ix, iy, iz]);
+    const R = rng(11);
+    const litCells = [[1, 1, 0], [1, 0, 1], [0, 1, 1], [-1, 1, 1], [1, -1, 1], [1, 1, -1], [0, -1, 1], [1, 0, -1]];
+    let k = 0;
+    for (const [ix, iy, iz] of order) {
+      const idx = litCells.findIndex((c) => c[0] === ix && c[1] === iy && c[2] === iz);
+      const isCenter = ix === 0 && iy === 0 && iz === 0;
+      const base = (R() < 0.5 ? M.glass : M.glassLight);
+      let lit = 0;
+      if (idx >= 0) {
+        const start = 0.08 + idx * 0.085;
+        lit = ease(clamp((t - start) / 0.06)) * (1 - ease(clamp((t - 0.9) / 0.09)));
+      }
+      const mats = [0, 1, 2, 3, 4, 5].map((fi) => (lit > 0 && fi !== 5 ? { ...M.grainMint } : base));
+      const faceset = isCenter ? [] : box([ix * pitch, iy * pitch, iz * pitch], [cell, cell, cell], mats);
+      faceset.forEach((f) => { f.lit = f.mat.grain ? lit : 0; });
+      faces = faces.concat(faceset);
+      k++;
+    }
+    // soft glow under the lattice and on the lit cells
+    glow(S * 0.5, S * 0.62, S * 0.55, [120, 130, 140], 0.25);
+    litCells.forEach((c, i) => {
+      const start = 0.08 + i * 0.085;
+      const lit = ease(clamp((t - start) / 0.06)) * (1 - ease(clamp((t - 0.9) / 0.09)));
+      if (lit <= 0.01) return;
+      const p = cam.view(mul(c, pitch));
+      const [x, y] = project(p, cam);
+      glow(x, y, S * 0.2, [110, 231, 183], 0.35 * lit);
+    });
+    drawFaces(faces, cam, { t });
+    vignette(S);
+  },
+};
+
+// helper: rounded-looking tile base is done in CSS; scenes only draw the object.
+function tileScene(tint, build) {
+  return {
+    size: 288,
+    draw(t) {
+      const S = this.size;
+      background(S, tint);
+      const { faces, cam, extra } = build(t, S);
+      glow(S * 0.5, S * 0.8, S * 0.38, tint, 0.9);
+      drawFaces(faces, cam, { t });
+      if (extra) extra();
+      vignette(S);
+    },
+  };
+}
+
+// 2. CLI tile (warm): a terminal plate with command lines and a blinking cursor block.
+scenes.cli = tileScene([255, 170, 70], (t, S) => {
+  const yaw = 0.45 * Math.sin(t * TAU) + 0.25;
+  const cam = makeCam(S, { yaw, pitch: 0.42, d: 13, f: S * 3.5 });
+  let faces = box([0, -0.2, 0], [3.4, 0.3, 2.4], M.plate);
+  const lines = [[-0.75, -1.3, 2.2], [-0.4, -1.3, 1.5], [-0.05, -1.3, 2.6], [0.3, -1.3, 1.1]];
+  lines.forEach(([z, x, len], i) => {
+    faces = faces.concat(box([x + len / 2 - 0.2, 0.1, z + 0.4], [len, 0.22, 0.2], i === 2 ? M.chrome : M.glassLight));
+  });
+  const blink = 0.55 + 0.45 * Math.sin(t * TAU * 2);
+  const cur = { ...M.amberGlow, c: M.amberGlow.c.map((k) => k * (0.4 + blink)) };
+  faces = faces.concat(box([-0.95, 0.16, 0.7], [0.34, 0.34, 0.24], cur));
+  return { faces, cam };
+});
+
+// 3. Schedule tile (violet): a burst of arrival bars on a plate.
+scenes.schedule = tileScene([167, 139, 250], (t, S) => {
+  const yaw = 0.7 * Math.sin(t * TAU) + 0.4;
+  const cam = makeCam(S, { yaw, pitch: 0.5, d: 14, f: S * 3.2 });
+  let faces = box([0, -0.55, 0], [4.2, 0.22, 2.6], M.plate);
+  const hs = [0.5, 0.9, 1.7, 2.3, 1.5, 0.8, 0.45];
+  hs.forEach((h, i) => {
+    const pulse = 1 + 0.12 * Math.sin(t * TAU + i * 0.9);
+    const hh = h * pulse;
+    faces = faces.concat(box([-1.65 + i * 0.55, -0.44 + hh / 2, 0], [0.38, hh, 0.9], i === 3 ? M.violetGlow : M.chrome));
+  });
+  return { faces, cam };
+});
+
+// 4. Seed tile (cyan): a die with glowing pips, turning.
+scenes.seed = tileScene([110, 220, 255], (t, S) => {
+  const cam = makeCam(S, { yaw: t * TAU, pitch: 0.55, d: 12, f: S * 3.1 });
+  let faces = box([0, 0, 0], [2.3, 2.3, 2.3], M.plate);
+  // standard die layouts, drawn as small glowing slabs on each face (1..6)
+  const layouts = { 1: [[0, 0]], 2: [[-0.5, -0.5], [0.5, 0.5]], 3: [[-0.55, -0.55], [0, 0], [0.55, 0.55]], 4: [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]], 5: [[-0.55, -0.55], [0.55, -0.55], [0, 0], [-0.55, 0.55], [0.55, 0.55]], 6: [[-0.5, -0.6], [0.5, -0.6], [-0.5, 0], [0.5, 0], [-0.5, 0.6], [0.5, 0.6]] };
+  const place = (n, axis, sign) => layouts[n].forEach(([u, v]) => {
+    const h = 1.15 * sign, sz = 0.42, th = 0.14;
+    const c = axis === 0 ? [h, v, u] : axis === 1 ? [u, h, v] : [u, v, h];
+    const size = axis === 0 ? [th, sz, sz] : axis === 1 ? [sz, th, sz] : [sz, sz, th];
+    faces = faces.concat(box(c, size, M.skyGlow));
+  });
+  place(1, 2, 1); place(6, 2, -1); place(2, 0, 1); place(5, 0, -1); place(3, 1, 1); place(4, 1, -1);
+  return { faces, cam };
+});
+
+// 5. Ring tile (green): a torus of permits with beads orbiting it.
+scenes.ring = tileScene([110, 231, 183], (t, S) => {
+  const cam = makeCam(S, { yaw: 0.25 * Math.sin(t * TAU), pitch: 0.85, d: 12, f: S * 3.0 });
+  let faces = torus(1.55, 0.42, 72, 22, M.chrome);
+  for (let i = 0; i < 3; i++) {
+    const a = t * TAU + (i * TAU) / 3;
+    faces = faces.concat(sphere(0.32, 14, 8, i === 0 ? M.mintGlow : M.glassLight, [1.55 * Math.cos(a), 0.55, 1.55 * Math.sin(a)]));
+  }
+  return { faces, cam };
+});
+
+// ------------------------------------------------------------------ static images
+const images = {
+  // a dark floor with perspective grid and soft light streaks
+  floor: { w: 1920, h: 1200, draw() {
+    const W = 1920, H = 1200;
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    const hz = H * 0.46;
+    const g = ctx.createLinearGradient(0, hz, 0, H);
+    g.addColorStop(0, "rgba(40,44,48,0.0)"); g.addColorStop(0.35, "rgba(26,28,31,0.55)"); g.addColorStop(1, "rgba(8,9,10,0.95)");
+    ctx.fillStyle = g; ctx.fillRect(0, hz, W, H - hz);
+    ctx.strokeStyle = "rgba(210,225,240,0.10)"; ctx.lineWidth = 1.2;
+    for (let i = -24; i <= 24; i++) { ctx.beginPath(); ctx.moveTo(W / 2 + i * 24, hz); ctx.lineTo(W / 2 + i * 260, H); ctx.stroke(); }
+    for (let k = 1; k < 16; k++) { const y = hz + Math.pow(k / 16, 2.2) * (H - hz); ctx.globalAlpha = 0.25 + 0.5 * (k / 16); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+    const fade = ctx.createLinearGradient(0, hz - 40, 0, hz + 260);
+    fade.addColorStop(0, "rgba(0,0,0,1)"); fade.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = fade; ctx.fillRect(0, hz - 40, W, 300);
+    const side = ctx.createRadialGradient(W / 2, H * 0.75, H * 0.2, W / 2, H * 0.75, W * 0.7);
+    side.addColorStop(0, "rgba(0,0,0,0)"); side.addColorStop(1, "rgba(0,0,0,0.92)");
+    ctx.fillStyle = side; ctx.fillRect(0, 0, W, H);
+    const R = rng(3); ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < 6000; i++) { ctx.fillStyle = `rgba(255,255,255,${R() * 0.035})`; ctx.fillRect(R() * W, R() * H, 1.4, 1.4); }
+    ctx.globalCompositeOperation = "source-over";
+  } },
+  // faint diagonal light rays
+  rays: { w: 1920, h: 1200, draw() {
+    const W = 1920, H = 1200;
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "lighter";
+    const streaks = [[-200, 780, 2300, 0.07, 150, -0.34], [-100, 940, 2200, 0.05, 90, -0.36], [300, 1010, 2000, 0.04, 70, -0.3], [-300, 640, 2400, 0.035, 60, -0.38]];
+    for (const [x, y, len, a, wd, ang] of streaks) {
+      ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+      const g = ctx.createLinearGradient(0, -wd, 0, wd);
+      g.addColorStop(0, "rgba(255,255,255,0)"); g.addColorStop(0.5, `rgba(235,240,246,${a})`); g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g; ctx.fillRect(0, -wd, len, wd * 2);
+      ctx.restore();
+    }
+    const R = rng(9);
+    for (let i = 0; i < 5000; i++) { ctx.fillStyle = `rgba(255,255,255,${R() * 0.03})`; ctx.fillRect(R() * W, R() * H, 1.4, 1.4); }
+    ctx.globalCompositeOperation = "source-over";
+  } },
+};
+
+window.sceneInfo = (name) => (scenes[name] ? { w: scenes[name].size, h: scenes[name].size } : { w: images[name].w, h: images[name].h });
+window.drawScene = (name, t) => {
+  const s = scenes[name];
+  if (s) { canvas.width = s.size; canvas.height = s.size; s.draw(t); } else { const im = images[name]; canvas.width = im.w; canvas.height = im.h; im.draw(); }
+  return canvas.toDataURL("image/png");
+};
+window.sceneNames = () => [...Object.keys(scenes), ...Object.keys(images)];
+</script>
+</body>
+</html>
