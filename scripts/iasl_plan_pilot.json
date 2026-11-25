@@ -1,0 +1,81 @@
+{
+ "description": "Pilot to check the harness only; NOT used for any conclusion.",
+ "setup": {
+  "students": 5000,
+  "capacities": [
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000
+  ],
+  "layer": [
+   200,
+   8,
+   4
+  ]
+ },
+ "lateness_tolerance_ms": 250,
+ "timeout_s": 5.0,
+ "client_processes": 6,
+ "warm_connections": 480,
+ "seeds": [
+  101
+ ],
+ "workloads": [
+  {
+   "name": "w4_overload",
+   "phases": [
+    [
+     540,
+     16
+    ]
+   ]
+  },
+  {
+   "name": "w5_burst_recovery",
+   "phases": [
+    [
+     144,
+     8
+    ],
+    [
+     648,
+     4
+    ],
+    [
+     144,
+     20
+    ]
+   ],
+   "burst": [
+    8,
+    12
+   ],
+   "schedule_end_s": 32
+  }
+ ],
+ "arms": {
+  "baseline": {
+   "env": null
+  },
+  "iasl_default": {
+   "env": {}
+  }
+ }
+}

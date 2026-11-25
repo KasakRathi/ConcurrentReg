@@ -1,0 +1,94 @@
+{
+ "description": "POST-HOC REPLICATION (not pre-registered): fresh seeds 6-10, overload workloads, baseline and default only",
+ "setup": {
+  "students": 5000,
+  "capacities": [
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000
+  ],
+  "layer": [
+   200,
+   8,
+   4
+  ]
+ },
+ "lateness_tolerance_ms": 250,
+ "timeout_s": 5.0,
+ "client_processes": 6,
+ "warm_connections": 480,
+ "seeds": [
+  6,
+  7,
+  8,
+  9,
+  10
+ ],
+ "workloads": [
+  {
+   "name": "w4_overload",
+   "phases": [
+    [
+     540,
+     16
+    ]
+   ]
+  },
+  {
+   "name": "w6_overload_small_seats",
+   "phases": [
+    [
+     540,
+     16
+    ]
+   ],
+   "capacities": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  }
+ ],
+ "arms": {
+  "baseline": {
+   "env": null
+  },
+  "iasl_default": {
+   "env": {}
+  }
+ }
+}

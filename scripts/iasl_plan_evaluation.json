@@ -1,0 +1,169 @@
+{
+ "description": "IASL evaluation: frozen before any evaluation run (docs/iasl/IASL_EXPERIMENTS.md).",
+ "setup": {
+  "students": 5000,
+  "capacities": [
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000,
+   1000000
+  ],
+  "layer": [
+   200,
+   8,
+   4
+  ]
+ },
+ "lateness_tolerance_ms": 250,
+ "timeout_s": 5.0,
+ "client_processes": 6,
+ "warm_connections": 480,
+ "seeds": [
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "workloads": [
+  {
+   "name": "w1_normal",
+   "phases": [
+    [
+     180,
+     20
+    ]
+   ]
+  },
+  {
+   "name": "w2_gradual",
+   "phases": [
+    [
+     180,
+     5
+    ],
+    [
+     270,
+     5
+    ],
+    [
+     360,
+     5
+    ],
+    [
+     450,
+     5
+    ],
+    [
+     540,
+     5
+    ]
+   ]
+  },
+  {
+   "name": "w3_burst",
+   "burst_count": 500
+  },
+  {
+   "name": "w4_overload",
+   "phases": [
+    [
+     540,
+     16
+    ]
+   ]
+  },
+  {
+   "name": "w5_burst_recovery",
+   "phases": [
+    [
+     144,
+     8
+    ],
+    [
+     648,
+     4
+    ],
+    [
+     144,
+     20
+    ]
+   ],
+   "burst": [
+    8,
+    12
+   ],
+   "schedule_end_s": 32
+  },
+  {
+   "name": "w6_overload_small_seats",
+   "phases": [
+    [
+     540,
+     16
+    ]
+   ],
+   "capacities": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  }
+ ],
+ "arms": {
+  "baseline": {
+   "env": null
+  },
+  "iasl_default": {
+   "env": {}
+  },
+  "iasl_sensitive": {
+   "env": {
+    "IASL_QUEUE_UTIL_PRESSURE": 0.25,
+    "IASL_QUEUE_UTIL_OVERLOAD": 0.45,
+    "IASL_QUEUE_WAIT_P95_PRESSURE_S": 0.05,
+    "IASL_QUEUE_WAIT_P95_OVERLOAD_S": 0.25,
+    "IASL_REJECTION_RATE_PRESSURE": 0.005,
+    "IASL_REJECTION_RATE_OVERLOAD": 0.025
+   },
+   "only": [
+    "w4_overload",
+    "w5_burst_recovery",
+    "w6_overload_small_seats"
+   ]
+  }
+ }
+}
