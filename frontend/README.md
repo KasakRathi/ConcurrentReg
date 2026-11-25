@@ -35,6 +35,7 @@ allow CORS for the frontend's origin; the backend does not do that today.
 | `/dashboard/demo` | **Live demo**: the guided, judge-ready flow against the real backend (needs the demo controls; see the root README) |
 | `/dashboard` | Overview: live OS-layer counters, selected experiment, what is not available |
 | `/dashboard/monitoring` | Live time series sampled by the browser |
+| `/dashboard/iasl` | **IASL**: the adaptive admission controller live: state, the gate and its limit, signals against their thresholds, the decision log, and the settings in force. Read-only. Shows "switched off" unless the backend runs with `IASL_ENABLED=1` (or start the demo with `IASL=1 ./scripts/start_demo.sh`) |
 | `/dashboard/experiments` | Import result files, history, baseline vs candidate |
 | `/dashboard/workloads` | Workload configuration, validation, schedule preview, exact terminal command |
 | `/dashboard/architecture` | Interactive request lifecycle with live counters per stage |
@@ -64,7 +65,7 @@ If the API is down, the Overview, Monitoring and Architecture pages show an erro
 | Database lock-wait metrics | an endpoint reading `information_schema.innodb_trx` / `performance_schema` (needs the PROCESS privilege) |
 | Live latency percentiles, live registration outcomes | server-side counters/histogram exposed over HTTP |
 | Queue depth per run | the generator or server logging `/os-layer/status` during a run |
-| Fixed vs adaptive comparison | the backend has optional IASL admission control (`GET /iasl/status|metrics|decisions|config`, off by default) but this dashboard has no view of it yet; compare runs from result files, and see `docs/iasl/IASL_EXPERIMENTS.md` |
+| Fixed vs adaptive comparison | the backend has optional IASL admission control (`GET /iasl/status|metrics|decisions|config`, off by default) and the IASL page shows it live; to compare fixed and adaptive runs use result files, and see `docs/iasl/IASL_EXPERIMENTS.md` |
 
 ## Verification of the logic that matters
 

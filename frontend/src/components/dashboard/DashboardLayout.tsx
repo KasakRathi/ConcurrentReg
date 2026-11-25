@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Activity, Boxes, PlayCircle, ChevronsLeft, ChevronsRight, FlaskConical, Gauge, Home, Menu, Search, SlidersHorizontal, X } from "lucide-react";
+import { Activity, Boxes, PlayCircle, ChevronsLeft, ChevronsRight, FlaskConical, Gauge, Home, Menu, Radar, Search, SlidersHorizontal, X } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { MonitorProvider, useMonitor } from "@/hooks/monitor";
@@ -17,12 +17,13 @@ const NAV = [
   { to: "/dashboard/demo", label: "Live demo", icon: PlayCircle },
   { to: "/dashboard", label: "Overview", icon: Gauge, end: true },
   { to: "/dashboard/monitoring", label: "Monitoring", icon: Activity },
+  { to: "/dashboard/iasl", label: "IASL", icon: Radar },
   { to: "/dashboard/experiments", label: "Experiments", icon: FlaskConical },
   { to: "/dashboard/workloads", label: "Workloads", icon: SlidersHorizontal },
   { to: "/dashboard/architecture", label: "Architecture", icon: Boxes },
 ];
 
-const CRUMBS: Record<string, string> = { demo: "Live demo", monitoring: "Monitoring", experiments: "Experiments", workloads: "Workloads", architecture: "Architecture", results: "Results" };
+const CRUMBS: Record<string, string> = { demo: "Live demo", monitoring: "Monitoring", iasl: "IASL", experiments: "Experiments", workloads: "Workloads", architecture: "Architecture", results: "Results" };
 
 function SearchButton() {
   const palette = usePalette();

@@ -173,8 +173,9 @@ where the limit is exact (tested), and the queue's own capacity is a hard bound 
 * **Scale.** MySQL correctness tests use up to 120 requests and 40 students; nothing at university scale, nothing against PostgreSQL.
 * **Timing** tests use real threads on one shared machine, which also hosts unrelated containers; they passed under CPU contention but that is a
   stress sample, not a proof.
-* **Frontend:** the three additive category changes are covered by typecheck and the existing frontend tests only; the dashboard has no IASL view yet and
-  component behaviour is not unit-tested (pre-existing limitation).
+* **Frontend:** the three additive category changes are covered by typecheck and the existing frontend tests only; the dashboard now has an IASL page (`/dashboard/iasl`). Its
+  data layer and decision wording are unit-tested (`iaslApi.test.ts`, `iaslLogic.test.ts`); the components themselves are checked by typecheck, build,
+  a Lighthouse audit (accessibility 100 on mobile) and a manual run against a live backend under load, not by component tests.
 * **SQLite** cannot validate concurrency (no row locks); its results show logic and API behaviour only.
 * The thresholds and limits used in tests are **fixture values**, not calibrated settings.
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DASHBOARD_LINKS, MENUS, menuForSection, SECTION_IDS, SECTION_LINKS } from "@/components/nav/nav-data";
 
-const DASHBOARD_ROUTES = ["/dashboard/demo", "/dashboard", "/dashboard/monitoring", "/dashboard/experiments", "/dashboard/workloads", "/dashboard/architecture"];
+const DASHBOARD_ROUTES = ["/dashboard/demo", "/dashboard", "/dashboard/monitoring", "/dashboard/iasl", "/dashboard/experiments", "/dashboard/workloads", "/dashboard/architecture"];
 
 describe("navbar data", () => {
   it("every in-page link points at a real landing-page section id", () => {

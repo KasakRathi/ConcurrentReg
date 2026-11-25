@@ -13,6 +13,7 @@ const Demo = lazy(() => import("@/pages/dashboard/Demo"));
 const Overview = lazy(() => import("@/pages/dashboard/Overview"));
 const Experiments = lazy(() => import("@/pages/dashboard/Experiments"));
 const Monitoring = lazy(() => import("@/pages/dashboard/Monitoring"));
+const Iasl = lazy(() => import("@/pages/dashboard/Iasl"));
 const Workloads = lazy(() => import("@/pages/dashboard/Workloads"));
 const Architecture = lazy(() => import("@/pages/dashboard/Architecture"));
 const Results = lazy(() => import("@/pages/dashboard/Results"));
@@ -55,6 +56,7 @@ export function App() {
                 <Route path="demo" element={<Demo />} />
                 <Route path="experiments" element={<Experiments />} />
                 <Route path="monitoring" element={<Monitoring />} />
+                <Route path="iasl" element={<Iasl />} />
                 <Route path="workloads" element={<Workloads />} />
                 <Route path="architecture" element={<Architecture />} />
                 <Route path="results" element={<Navigate to="/dashboard/experiments" replace />} />
