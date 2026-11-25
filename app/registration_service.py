@@ -1,120 +1,211 @@
-import json
-import logging
 import time
-import uuid
-from dataclasses import dataclass
+import logging
 from datetime import datetime
+from sqlalchemy.exc import IntegrityError, OperationalError
+from app.db.database import get_db_session
+from app.db.models import Student, Course, Registration, RegistrationRequest
 
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+logger = logging.getLogger(__name__)
 
-from app.models import CourseSection, Registration, Student
+class RegistrationError(Exception):
+    def __init__(self, message, code="REGISTRATION_FAILED"):
+        super().__init__(message)
+        self.message = message
+        self.code = code
 
-logger = logging.getLogger("registration")
-
-# Result codes. The API layer turns these into HTTP status codes.
-SUCCESS = "SUCCESS"
-DUPLICATE = "DUPLICATE"
-FULL = "FULL"
-STUDENT_NOT_FOUND = "STUDENT_NOT_FOUND"
-SECTION_NOT_FOUND = "SECTION_NOT_FOUND"
-ERROR = "ERROR"
-
-
-@dataclass
-class RegistrationResult:
-    code: str
-    message: str
-
-    @property
-    def success(self):
-        return self.code == SUCCESS
-
-
-def register_student(db, student_code, section_id, request_id=None):
-    """Try to register one student in one course section.
-
-    `student_code` is the text code such as "STU001".
-    `request_id` lets a caller (the Day 3 OS layer) pass its own id so both log lines match.
-    Never raises for expected problems; returns a RegistrationResult instead.
+class RegistrationService:
     """
-    request_id = request_id or str(uuid.uuid4())
-    started_at = datetime.now()
-    timer = time.perf_counter()
-    error_detail = None
+    Transactional Course Registration Service with Row-Level Locking and ACID guarantees.
+    Prevents over-enrollment and duplicate registrations under high concurrent contention.
+    """
 
-    try:
-        result = _register(db, student_code, section_id)
-    except SQLAlchemyError as error:
-        db.rollback()
-        error_detail = f"{type(error).__name__}: {getattr(error, 'orig', error)}"
-        result = RegistrationResult(ERROR, "Registration failed because of a database error")
+    @staticmethod
+    def register_student(student_external_id: str, course_id: int, request_id: str = None, max_retries: int = 3):
+        """
+        Executes course registration in an explicit ACID transaction with row-level locking.
+        
+        Algorithm:
+        1. Begin Transaction
+        2. Validate Student exists
+        3. Lock Course row with SELECT ... FOR UPDATE
+        4. Validate Course exists
+        5. Check if Student is already registered (Application check)
+        6. Check if Seats are available (enrolled_count < capacity)
+        7. Insert Registration row (Database UNIQUE constraint protects against races)
+        8. Increment Course.enrolled_count
+        9. Commit Transaction
+        If any validation fails or error occurs:
+           Rollback Transaction and record error
+        """
+        attempts = 0
+        contention_detected = False
+        retried = False
 
-    logger.info(json.dumps({
-        "event": "registration",
-        "request_id": request_id,
-        "student_id": student_code,
-        "section_id": section_id,
-        "started_at": started_at.isoformat(timespec="milliseconds"),
-        "result": result.code,
-        "error": error_detail,
-        "duration_ms": round((time.perf_counter() - timer) * 1000, 2),
-    }))
-    return result
+        while attempts < max_retries:
+            attempts += 1
+            start_time = time.time()
+            try:
+                with get_db_session() as session:
+                    # 1. Validate Student existence
+                    student = session.query(Student).filter(Student.student_id == student_external_id).first()
+                    if not student:
+                        raise RegistrationError(f"Student '{student_external_id}' not found.", code="STUDENT_NOT_FOUND")
 
+                    # 2. Acquire Row-Level Lock on Course row
+                    # with_for_update() executes 'SELECT ... FOR UPDATE' in MySQL InnoDB
+                    course = session.query(Course).filter(Course.id == course_id).with_for_update().first()
+                    if not course:
+                        raise RegistrationError(f"Course ID {course_id} not found.", code="COURSE_NOT_FOUND")
 
-def _register(db, student_code, section_id):
-    # One transaction for the whole request. It starts at the first query below
-    # and ends with exactly one commit or rollback on every path.
-    student = db.scalar(select(Student).where(Student.student_id == student_code))
-    if student is None:
-        db.rollback()
-        return RegistrationResult(STUDENT_NOT_FOUND, "Student does not exist")
+                    # 3. Check for existing active registration (Application Check)
+                    existing_reg = session.query(Registration).filter(
+                        Registration.student_id == student.id,
+                        Registration.course_id == course.id,
+                        Registration.registration_status == 'CONFIRMED'
+                    ).first()
+                    if existing_reg:
+                        raise RegistrationError(
+                            f"Already Registered: Student '{student_external_id}' is already registered for {course.course_code}.",
+                            code="ALREADY_REGISTERED"
+                        )
 
-    # The lock query is also our "does this section exist" check.
-    section = lock_section(db, section_id)
-    if section is None:
-        db.rollback()
-        return RegistrationResult(SECTION_NOT_FOUND, "Course section does not exist")
+                    # 4. Check Seat Availability (Capacity Check)
+                    if course.enrolled_count >= course.capacity:
+                        raise RegistrationError(
+                            f"Course is Full: '{course.course_name}' has reached capacity ({course.capacity}/{course.capacity}).",
+                            code="COURSE_FULL"
+                        )
 
-    # This read may come from a snapshot taken before we got the lock, so it can
-    # miss a registration committed while we waited. The UNIQUE constraint
-    # catches that case at insert time (see the IntegrityError handler below).
-    if is_already_registered(db, student.id, section_id):
-        db.rollback()
-        return RegistrationResult(DUPLICATE, "Student is already registered for this course section")
+                    # 5. Insert Registration Record
+                    new_reg = Registration(
+                        student_id=student.id,
+                        course_id=course.id,
+                        registration_status='CONFIRMED',
+                        registered_at=datetime.utcnow()
+                    )
+                    session.add(new_reg)
 
-    if section.available_seats <= 0:
-        db.rollback()
-        return RegistrationResult(FULL, "Course section is full")
+                    # 6. Increment Enrolled Count atomically within transaction
+                    course.enrolled_count += 1
 
-    try:
-        db.add(Registration(student_id=student.id, section_id=section_id))
-        decrease_available_seats(db, section)
-        db.commit()
-    except IntegrityError as error:
-        db.rollback()
-        # The unique constraint is the last line of defence against duplicates.
-        if "uq_student_section" in str(error.orig):
-            return RegistrationResult(DUPLICATE, "Student is already registered for this course section")
-        raise
+                    # 7. Commit Transaction
+                    session.commit()
 
-    return RegistrationResult(SUCCESS, "Registration successful")
+                    proc_time = round((time.time() - start_time) * 1000, 2)
+                    logger.info(
+                        f"[TRANSACTION COMMIT] Registered student {student_external_id} for course {course.course_code}. "
+                        f"Enrolled: {course.enrolled_count}/{course.capacity}. Elapsed: {proc_time}ms"
+                    )
 
+                    return {
+                        "success": True,
+                        "status": "SUCCESS",
+                        "message": "Registration Successful",
+                        "registration_id": new_reg.id,
+                        "student_id": student.student_id,
+                        "student_name": student.name,
+                        "course_id": course.id,
+                        "course_code": course.course_code,
+                        "course_name": course.course_name,
+                        "enrolled_count": course.enrolled_count,
+                        "capacity": course.capacity,
+                        "attempts": attempts,
+                        "contention": contention_detected,
+                        "retried": retried,
+                        "processing_time_ms": proc_time
+                    }
 
-def lock_section(db, section_id):
-    """SELECT ... FOR UPDATE: other transactions wait here until we commit or roll back."""
-    query = select(CourseSection).where(CourseSection.id == section_id).with_for_update()
-    return db.scalar(query)
+            except IntegrityError as ie:
+                # Catch database-level UNIQUE constraint violations (race condition safety net)
+                logger.warning(f"[DB CONSTRAINT VIOLATION] Integrity error for {student_external_id} in course {course_id}: {ie}")
+                return {
+                    "success": False,
+                    "status": "FAILED",
+                    "code": "ALREADY_REGISTERED",
+                    "message": "Already Registered (enforced by DB unique constraint)",
+                    "attempts": attempts,
+                    "contention": True,
+                    "retried": retried
+                }
 
+            except OperationalError as oe:
+                # Database lock wait timeout or deadlock detected
+                contention_detected = True
+                retried = True
+                logger.warning(f"[DB CONTENTION] Lock wait or deadlock on attempt {attempts}/{max_retries}: {oe}")
+                if attempts < max_retries:
+                    time.sleep(0.05 * (2 ** attempts))  # exponential backoff
+                    continue
+                else:
+                    return {
+                        "success": False,
+                        "status": "FAILED",
+                        "code": "DB_LOCK_TIMEOUT",
+                        "message": "Database Error: Lock contention timeout under concurrent load",
+                        "attempts": attempts,
+                        "contention": True,
+                        "retried": True
+                    }
 
-def is_already_registered(db, student_pk, section_id):
-    query = select(Registration.id).where(
-        Registration.student_id == student_pk,
-        Registration.section_id == section_id,
-    )
-    return db.scalar(query) is not None
+            except RegistrationError as re:
+                # Controlled domain validation failures (e.g. course full, already registered)
+                return {
+                    "success": False,
+                    "status": "FAILED",
+                    "code": re.code,
+                    "message": re.message,
+                    "attempts": attempts,
+                    "contention": contention_detected,
+                    "retried": retried
+                }
 
+            except Exception as e:
+                logger.error(f"[TRANSACTION ROLLBACK] Unexpected registration error: {e}", exc_info=True)
+                return {
+                    "success": False,
+                    "status": "FAILED",
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Database Error: {str(e)}",
+                    "attempts": attempts,
+                    "contention": contention_detected,
+                    "retried": retried
+                }
 
-def decrease_available_seats(db, section):
-    section.available_seats -= 1
+        return {
+            "success": False,
+            "status": "FAILED",
+            "code": "MAX_RETRIES_EXCEEDED",
+            "message": "Registration failed after maximum retry attempts.",
+            "attempts": attempts,
+            "contention": True,
+            "retried": True
+        }
+
+    @staticmethod
+    def cancel_registration(registration_id: int):
+        """
+        Cancels an existing registration within a transaction and safely decrements seat count.
+        """
+        start_time = time.time()
+        with get_db_session() as session:
+            reg = session.query(Registration).filter(Registration.id == registration_id).first()
+            if not reg:
+                raise RegistrationError("Registration record not found.", code="NOT_FOUND")
+
+            course = session.query(Course).filter(Course.id == reg.course_id).with_for_update().first()
+            if course and course.enrolled_count > 0:
+                course.enrolled_count -= 1
+
+            course_code = course.course_code if course else "Unknown"
+            session.delete(reg)
+            session.commit()
+
+            proc_time = round((time.time() - start_time) * 1000, 2)
+            logger.info(f"[TRANSACTION COMMIT] Cancelled registration {registration_id} for course {course_code}. Elapsed: {proc_time}ms")
+
+            return {
+                "success": True,
+                "status": "CANCELLED",
+                "message": "Registration cancelled successfully.",
+                "processing_time_ms": proc_time
+            }
