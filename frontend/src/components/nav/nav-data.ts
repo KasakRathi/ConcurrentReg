@@ -1,4 +1,4 @@
-import { Activity, BarChart3, Boxes, FlaskConical, Gauge, PlayCircle, Scale, ShieldCheck, SlidersHorizontal, Terminal, type LucideIcon } from "lucide-react";
+import { Activity, BarChart3, Boxes, FlaskConical, Gauge, PlayCircle, Radar, Scale, ShieldCheck, SlidersHorizontal, Terminal, type LucideIcon } from "lucide-react";
 
 /** Every destination the navbar, the mobile sheet and the command palette link to. Section ids exist on the landing page. */
 export interface NavLinkDef {
@@ -42,6 +42,7 @@ export const DASHBOARD_LINKS: NavLinkDef[] = [
   { id: "d-demo", label: "Live demo", desc: "Run it for real, check the database, run the tests", to: "/dashboard/demo", Icon: PlayCircle },
   { id: "d-overview", label: "Overview", desc: "Live counters and the selected run", to: "/dashboard", Icon: Gauge },
   { id: "d-monitoring", label: "Monitoring", desc: "Queue, workers and semaphore over time", to: "/dashboard/monitoring", Icon: Activity },
+  { id: "d-iasl", label: "IASL", desc: "Adaptive admission limit, system state and every decision", to: "/dashboard/iasl", Icon: Radar },
   { id: "d-experiments", label: "Experiments", desc: "Import, compare and export runs", to: "/dashboard/experiments", Icon: FlaskConical },
   { id: "d-workloads", label: "Workloads", desc: "Validate settings, build commands", to: "/dashboard/workloads", Icon: SlidersHorizontal },
   { id: "d-architecture", label: "Architecture", desc: "Stage by stage, with live values", to: "/dashboard/architecture", Icon: Boxes },
